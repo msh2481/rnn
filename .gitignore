@@ -1,0 +1,6 @@
+__pycache__
+*.zip
+_explorer
+datasets
+opt_results.csv
+.claude
