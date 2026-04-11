@@ -45,7 +45,7 @@ class Poly:
 if __name__ == "__main__":
     from utils import ScorerStepByStep
 
-    test_file = f"{CURRENT_DIR}/../../datasets/train.parquet"
+    test_file = f"{CURRENT_DIR}/../../datasets/test.parquet"
     model = Poly(d=6, p=4 / 3)
     print(model)
     scorer = ScorerStepByStep(test_file)

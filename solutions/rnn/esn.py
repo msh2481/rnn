@@ -1,0 +1,210 @@
+import os
+import sys
+
+import numpy as np
+import pandas as pd
+from tqdm.auto import tqdm
+
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(f"{CURRENT_DIR}/../..")
+
+from utils import DataPoint
+
+
+class ESN:
+    def __init__(
+        self,
+        reservoir_size=None,
+        spectral_radius=None,
+        leak_rate=None,
+        input_scale=None,
+        bias_scale=None,
+        density=None,
+        ridge_alpha=None,
+        seed=None,
+    ):
+        self.rng = np.random.default_rng(seed)
+
+        self.reservoir_size = reservoir_size
+        if self.reservoir_size is None:
+            self.reservoir_size = 256
+
+        self.spectral_radius = spectral_radius
+        if self.spectral_radius is None:
+            self.spectral_radius = self.rng.uniform(0.5, 1.2)
+
+        self.leak_rate = leak_rate
+        if self.leak_rate is None:
+            # self.leak_rate = np.exp(self.rng.uniform(np.log(0.05), np.log(1.0)))
+            self.leak_rate = 0.2
+
+        self.input_scale = input_scale
+        if self.input_scale is None:
+            self.input_scale = np.exp(self.rng.uniform(np.log(0.05), np.log(2.0)))
+
+        self.bias_scale = bias_scale
+        if self.bias_scale is None:
+            self.bias_scale = np.exp(self.rng.uniform(np.log(1e-3), np.log(0.3)))
+
+        self.density = density
+        if self.density is None:
+            self.density = self.rng.uniform(0.05, 0.3)
+
+        self.ridge_alpha = ridge_alpha
+        if self.ridge_alpha is None:
+            self.ridge_alpha = np.exp(self.rng.uniform(np.log(1e-6), np.log(1.0)))
+
+        self.current_seq_ix = None
+        self.state = None
+        self.input_dim = None
+        self.w_in = None
+        self.w_res = None
+        self.bias = None
+        self.w_out = None
+
+    def __repr__(self):
+        return (
+            "ESN("
+            f"reservoir_size={self.reservoir_size}, "
+            f"spectral_radius={self.spectral_radius}, "
+            f"leak_rate={self.leak_rate}, "
+            f"input_scale={self.input_scale}, "
+            f"bias_scale={self.bias_scale}, "
+            f"density={self.density}, "
+            f"ridge_alpha={self.ridge_alpha})"
+        )
+
+    def _ensure_initialized(self, input_dim: int):
+        if self.input_dim == input_dim and self.w_in is not None:
+            return
+
+        self.input_dim = input_dim
+        self.state = np.zeros(self.reservoir_size)
+
+        self.w_in = self.rng.normal(
+            loc=0.0,
+            scale=self.input_scale / np.sqrt(max(1, input_dim)),
+            size=(self.reservoir_size, input_dim),
+        )
+
+        # Sparse random reservoir rescaled to the target spectral radius.
+        mask = (
+            self.rng.random((self.reservoir_size, self.reservoir_size)) < self.density
+        )
+        raw_res = self.rng.normal(
+            loc=0.0,
+            scale=1.0 / np.sqrt(max(1, self.reservoir_size * self.density)),
+            size=(self.reservoir_size, self.reservoir_size),
+        )
+        self.w_res = raw_res * mask
+
+        current_radius = self._spectral_radius(self.w_res)
+        if current_radius > 0:
+            self.w_res *= self.spectral_radius / current_radius
+
+        self.bias = self.rng.normal(
+            loc=0.0, scale=self.bias_scale, size=self.reservoir_size
+        )
+
+    def _spectral_radius(self, matrix: np.ndarray) -> float:
+        eigenvalues = np.linalg.eigvals(matrix)
+        return float(np.max(np.abs(eigenvalues)))
+
+    def _reset_sequence(self, seq_ix: int):
+        self.current_seq_ix = seq_ix
+        self.state = np.zeros(self.reservoir_size)
+
+    def _advance_state(self, data_point: DataPoint):
+        self._ensure_initialized(data_point.state.shape[0])
+
+        if self.current_seq_ix != data_point.seq_ix:
+            self._reset_sequence(data_point.seq_ix)
+
+        pre_activation = (
+            self.w_in @ data_point.state + self.w_res @ self.state + self.bias
+        )
+        candidate_state = np.tanh(pre_activation)
+        self.state = (
+            1 - self.leak_rate
+        ) * self.state + self.leak_rate * candidate_state
+
+    def _readout_features(self, state_vector: np.ndarray) -> np.ndarray:
+        return np.concatenate([state_vector, self.state, np.array([1.0])])
+
+    def train(self, dataset_path: str, show_progress: bool = True):
+        dataset = pd.read_parquet(dataset_path)
+        rows = tqdm(dataset.values) if show_progress else dataset.values
+
+        gram = None
+        rhs = None
+        next_features = None
+
+        self.current_seq_ix = None
+        self.state = None
+
+        for row in rows:
+            seq_ix = row[0]
+            step_in_seq = row[1]
+            need_prediction = row[2]
+            new_state = row[3:]
+
+            if next_features is not None:
+                if gram is None:
+                    feature_dim = next_features.shape[0]
+                    output_dim = new_state.shape[0]
+                    gram = np.eye(feature_dim) * self.ridge_alpha
+                    rhs = np.zeros((feature_dim, output_dim))
+                gram += np.outer(next_features, next_features)
+                rhs += np.outer(next_features, new_state)
+
+            data_point = DataPoint(seq_ix, step_in_seq, need_prediction, new_state)
+            self._advance_state(data_point)
+
+            if need_prediction:
+                next_features = self._readout_features(new_state)
+            else:
+                next_features = None
+
+        if gram is None or rhs is None:
+            raise ValueError("No training examples were collected for the ESN readout.")
+
+        self.w_out = np.linalg.solve(gram, rhs)
+        self.current_seq_ix = None
+        self.state = np.zeros(self.reservoir_size)
+        return self
+
+    def predict(self, data_point: DataPoint) -> np.ndarray:
+        if self.w_out is None:
+            raise ValueError(
+                "ESN readout is not trained. Call .train(dataset_path) first."
+            )
+
+        self._advance_state(data_point)
+
+        if not data_point.need_prediction:
+            return None
+
+        features = self._readout_features(data_point.state)
+        return features @ self.w_out
+
+
+if __name__ == "__main__":
+    from utils import ScorerStepByStep
+
+    train_file = f"{CURRENT_DIR}/../../datasets/train.parquet"
+    test_file = f"{CURRENT_DIR}/../../datasets/test.parquet"
+    model = ESN()
+    print(model)
+    print("Training ESN readout...")
+    model.train(train_file)
+    scorer = ScorerStepByStep(test_file)
+    print("Testing echo state network...")
+    print(f"Feature dimensionality: {scorer.dim}")
+    print(f"Number of rows in dataset: {len(scorer.dataset)}")
+    results = scorer.score(model)
+    print(f"Mean R² across all features: {results['mean_r2']:.6f}")
+    print("\nR² for first 5 features:")
+    for i in range(min(5, len(scorer.features))):
+        feature = scorer.features[i]
+        print(f"  {feature}: {results[feature]:.6f}")
+    print(f"MSE score: {results['mse_score']:.6f}")
