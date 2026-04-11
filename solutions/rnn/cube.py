@@ -1,15 +1,15 @@
 import numpy as np
 
 try:
-    from ._structured_base import StructuredESNBase, evaluate_model
+    from ._structured_base import evaluate_model, StructuredESNBase
 except ImportError:
-    from _structured_base import StructuredESNBase, evaluate_model
+    from _structured_base import evaluate_model, StructuredESNBase
 
 
 class CubeESN(StructuredESNBase):
     def __init__(
         self,
-        d: int = 16,
+        d: int = 4,
         spectral_radius=None,
         leak_rate=None,
         input_scale=None,

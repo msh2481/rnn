@@ -20,10 +20,18 @@ class ESN:
         input_scale=None,
         bias_scale=None,
         density=None,
+        nonlinearity=None,
         ridge_alpha=None,
         seed=None,
     ):
         self.rng = np.random.default_rng(seed)
+        if nonlinearity is None:
+            nonlinearity = np.random.choice(["relu", "gelu", "tanh", "hardtanh"])
+        self.nonlinearity = nonlinearity.lower()
+        if self.nonlinearity not in {"relu", "gelu", "tanh", "hardtanh"}:
+            raise ValueError(
+                "nonlinearity must be one of: 'relu', 'gelu', 'tanh', 'hardtanh'"
+            )
 
         self.reservoir_size = reservoir_size
         if self.reservoir_size is None:
@@ -39,7 +47,6 @@ class ESN:
 
         self.input_scale = input_scale
         if self.input_scale is None:
-            self.input_scale = np.exp(self.rng.uniform(np.log(0.2), np.log(0.5)))
             self.input_scale = 0.4
 
         self.bias_scale = bias_scale
@@ -71,6 +78,7 @@ class ESN:
             f"input_scale={self.input_scale}, "
             f"bias_scale={self.bias_scale}, "
             f"density={self.density}, "
+            f"nonlinearity='{self.nonlinearity}', "
             f"ridge_alpha={self.ridge_alpha})"
         )
 
@@ -114,6 +122,17 @@ class ESN:
         self.current_seq_ix = seq_ix
         self.state = np.zeros(self.reservoir_size)
 
+    def _activate(self, x: np.ndarray) -> np.ndarray:
+        if self.nonlinearity == "relu":
+            return np.maximum(x, 0.0)
+        if self.nonlinearity == "gelu":
+            return (
+                0.5 * x * (1.0 + np.tanh(np.sqrt(2.0 / np.pi) * (x + 0.044715 * x**3)))
+            )
+        if self.nonlinearity == "hardtanh":
+            return np.clip(x, -1.0, 1.0)
+        return np.tanh(x)
+
     def _advance_state(self, data_point: DataPoint):
         self._ensure_initialized(data_point.state.shape[0])
 
@@ -123,7 +142,7 @@ class ESN:
         pre_activation = (
             self.w_in @ data_point.state + self.w_res @ self.state + self.bias
         )
-        candidate_state = np.tanh(pre_activation)
+        candidate_state = self._activate(pre_activation)
         self.state = (
             1 - self.leak_rate
         ) * self.state + self.leak_rate * candidate_state

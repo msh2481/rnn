@@ -5,10 +5,8 @@ from itertools import count
 from multiprocessing import get_context
 
 import pandas as pd
-from solutions.rnn.const_deg import ConstDegESN
+from solutions.rnn.es2n import ES2N
 from solutions.rnn.esn import ESN
-from solutions.rnn.lora import LoraESN
-from solutions.rnn.monarch import MonarchESN
 from utils import ScorerStepByStep
 
 TRAIN_FILE = "datasets/train.parquet"
@@ -19,10 +17,8 @@ SCORER = None
 def get_model():
     return random.choice(
         [
-            MonarchESN(d=random.choice([64, 128, 256])),
-            LoraESN(d=random.choice([64, 128, 256]), r=random.choice([16, 32, 64])),
-            ConstDegESN(d=random.choice([64, 128, 256]), deg=random.choice([4, 8, 16])),
-            ESN(reservoir_size=random.choice([64, 128, 256])),
+            ESN(reservoir_size=128),
+            ES2N(reservoir_size=128),
         ]
     )
 
