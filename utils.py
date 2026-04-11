@@ -90,37 +90,31 @@ class ScorerStepByStep:
         predictions = []
         targets = []
 
-        next_prediction = None
+        prev_needed = False
+        prev_prediction = None
 
         rows = tqdm(self.dataset.values) if show_progress else self.dataset.values
         for row in rows:
             seq_ix = row[0]
             step_in_seq = row[1]
             need_prediction = row[2]
-            new_state = row[3:]  # the rest is state vector
+            new_state = row[3:]
             #
-            if next_prediction is not None:
-                predictions.append(next_prediction)
+            if prev_needed:
+                predictions.append(prev_prediction)
                 targets.append(new_state)
             #
             data_point = DataPoint(seq_ix, step_in_seq, need_prediction, new_state)
-            next_prediction = model.predict(data_point)
+            prev_prediction = model.predict(data_point)
+            prev_needed = need_prediction
 
-            self.check_prediction(data_point, next_prediction)
+            if prev_prediction.shape[0] != self.dim:
+                raise ValueError(
+                    f"Prediction has wrong shape: {prev_prediction.shape[0]} != {self.dim}"
+                )
 
         # report metrics
         return self.calc_metrics(np.array(predictions), np.array(targets))
-
-    def check_prediction(self, data_point: DataPoint, prediction: np.ndarray):
-        if prediction is None:
-            if data_point.need_prediction:
-                raise ValueError(f"Prediction is required for {data_point}")
-            return
-
-        if prediction.shape[0] != self.dim:
-            raise ValueError(
-                f"Prediction has wrong shape: {prediction.shape[0]} != {self.dim}"
-            )
 
     def calc_metrics(self, predictions: np.ndarray, targets: np.ndarray) -> dict:
         scores = {}
