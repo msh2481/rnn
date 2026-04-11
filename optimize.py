@@ -4,9 +4,8 @@ from itertools import count
 from multiprocessing import get_context
 
 import pandas as pd
-from solutions.rnn.esn import ESN
-from solutions.simple.ema import EMA
-from solutions.simple.poly import Poly
+from solutions.rnn.lora import LoraESN
+from solutions.rnn.monarch import MonarchESN
 from utils import ScorerStepByStep
 
 TRAIN_FILE = "datasets/train.parquet"
@@ -15,8 +14,7 @@ SCORER = None
 
 
 def get_model():
-    classes = [ESN]
-    return random.choice(classes)()
+    return MonarchESN(d=64)
 
 
 def init_worker():

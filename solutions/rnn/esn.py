@@ -27,32 +27,32 @@ class ESN:
 
         self.reservoir_size = reservoir_size
         if self.reservoir_size is None:
-            self.reservoir_size = 256
+            self.reservoir_size = 1024
 
         self.spectral_radius = spectral_radius
         if self.spectral_radius is None:
-            self.spectral_radius = self.rng.uniform(0.5, 1.2)
+            self.spectral_radius = self.rng.uniform(0.8, 1.0)
 
         self.leak_rate = leak_rate
         if self.leak_rate is None:
-            # self.leak_rate = np.exp(self.rng.uniform(np.log(0.05), np.log(1.0)))
-            self.leak_rate = 0.2
+            self.leak_rate = np.exp(self.rng.uniform(np.log(0.1), np.log(0.4)))
 
         self.input_scale = input_scale
         if self.input_scale is None:
-            self.input_scale = np.exp(self.rng.uniform(np.log(0.05), np.log(2.0)))
+            self.input_scale = np.exp(self.rng.uniform(np.log(0.2), np.log(0.5)))
+            self.input_scale = 0.4
 
         self.bias_scale = bias_scale
         if self.bias_scale is None:
-            self.bias_scale = np.exp(self.rng.uniform(np.log(1e-3), np.log(0.3)))
+            self.bias_scale = 0.05
 
         self.density = density
         if self.density is None:
-            self.density = self.rng.uniform(0.05, 0.3)
+            self.density = self.rng.uniform(0.12, 0.18)
 
         self.ridge_alpha = ridge_alpha
         if self.ridge_alpha is None:
-            self.ridge_alpha = np.exp(self.rng.uniform(np.log(1e-6), np.log(1.0)))
+            self.ridge_alpha = np.exp(self.rng.uniform(np.log(0.01), np.log(1.0)))
 
         self.current_seq_ix = None
         self.state = None
