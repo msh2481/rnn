@@ -26,7 +26,7 @@ class ESN:
     ):
         self.rng = np.random.default_rng(seed)
         if nonlinearity is None:
-            nonlinearity = np.random.choice(["relu", "gelu", "tanh", "hardtanh"])
+            nonlinearity = "tanh"
         self.nonlinearity = nonlinearity.lower()
         if self.nonlinearity not in {"relu", "gelu", "tanh", "hardtanh"}:
             raise ValueError(
@@ -43,7 +43,7 @@ class ESN:
 
         self.leak_rate = leak_rate
         if self.leak_rate is None:
-            self.leak_rate = np.exp(self.rng.uniform(np.log(0.1), np.log(0.4)))
+            self.leak_rate = np.exp(self.rng.uniform(np.log(0.1), np.log(0.2)))
 
         self.input_scale = input_scale
         if self.input_scale is None:
@@ -55,11 +55,11 @@ class ESN:
 
         self.density = density
         if self.density is None:
-            self.density = self.rng.uniform(0.12, 0.18)
+            self.density = self.rng.uniform(0.08, 0.24)
 
         self.ridge_alpha = ridge_alpha
         if self.ridge_alpha is None:
-            self.ridge_alpha = np.exp(self.rng.uniform(np.log(0.01), np.log(1.0)))
+            self.ridge_alpha = np.exp(self.rng.uniform(np.log(0.01), np.log(0.1)))
 
         self.current_seq_ix = None
         self.state = None
@@ -150,8 +150,9 @@ class ESN:
     def _readout_features(self, state_vector: np.ndarray) -> np.ndarray:
         return np.concatenate([state_vector, self.state, np.array([1.0])])
 
-    def train(self, dataset_path: str, show_progress: bool = True):
-        dataset = pd.read_parquet(dataset_path)
+    def train(self, dataset, show_progress: bool = True):
+        if isinstance(dataset, str):
+            dataset = pd.read_parquet(dataset)
         rows = tqdm(dataset.values) if show_progress else dataset.values
 
         gram = None
@@ -199,10 +200,6 @@ class ESN:
             )
 
         self._advance_state(data_point)
-
-        if not data_point.need_prediction:
-            return None
-
         features = self._readout_features(data_point.state)
         return features @ self.w_out
 

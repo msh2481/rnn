@@ -1,8 +1,9 @@
+from dataclasses import dataclass
+
 import numpy as np
 import pandas as pd
-from tqdm.auto import tqdm
-from dataclasses import dataclass
 from sklearn.metrics import r2_score
+from tqdm.auto import tqdm
 
 
 @dataclass
@@ -18,6 +19,63 @@ class PredictionModel:
     def predict(self, data_point: DataPoint) -> np.ndarray:
         # return current state as dummy prediction
         return data_point.state
+
+
+class Stack:
+    def __init__(self, f, g):
+        self.f = f
+        self.g = g
+        self.f_last_pred = None
+        self.current_seq_ix = None
+
+    def predict(self, data_point: DataPoint) -> np.ndarray:
+        if self.current_seq_ix != data_point.seq_ix:
+            self.current_seq_ix = data_point.seq_ix
+            self.f_last_pred = np.zeros_like(data_point.state)
+        f_pred = self.f.predict(data_point)
+        g_point = DataPoint(
+            data_point.seq_ix,
+            data_point.step_in_seq,
+            data_point.need_prediction,
+            data_point.state - self.f_last_pred,
+        )
+        g_pred = self.g.predict(g_point)
+        self.f_last_pred = f_pred
+        return f_pred + g_pred
+    
+    def train(self, dataset, show_progress: bool = True):
+        if isinstance(dataset, str):
+            dataset = pd.read_parquet(dataset)
+
+        # Train f on original dataset
+        self.f.train(dataset, show_progress=show_progress)
+
+        # Build residual dataset for g by replaying f through the data
+        rows = tqdm(dataset.values) if show_progress else dataset.values
+        residual_rows = []
+        f_last_pred = None
+        current_seq_ix = None
+
+        for row in rows:
+            seq_ix = row[0]
+            step_in_seq = row[1]
+            need_prediction = row[2]
+            new_state = row[3:]
+
+            if current_seq_ix != seq_ix:
+                current_seq_ix = seq_ix
+                f_last_pred = np.zeros_like(new_state)
+
+            residual_state = new_state - f_last_pred
+            residual_rows.append(
+                np.concatenate([[seq_ix, step_in_seq, need_prediction], residual_state])
+            )
+
+            data_point = DataPoint(seq_ix, step_in_seq, need_prediction, new_state)
+            f_last_pred = self.f.predict(data_point)
+
+        residual_df = pd.DataFrame(residual_rows, columns=dataset.columns)
+        self.g.train(residual_df, show_progress=show_progress)
 
 
 class ScorerStepByStep:
@@ -54,13 +112,10 @@ class ScorerStepByStep:
         return self.calc_metrics(np.array(predictions), np.array(targets))
 
     def check_prediction(self, data_point: DataPoint, prediction: np.ndarray):
-        if not data_point.need_prediction:
-            if prediction is not None:
-                raise ValueError(f"Prediction is not needed for {data_point}")
-            return
-
         if prediction is None:
-            raise ValueError(f"Prediction is required for {data_point}")
+            if data_point.need_prediction:
+                raise ValueError(f"Prediction is required for {data_point}")
+            return
 
         if prediction.shape[0] != self.dim:
             raise ValueError(

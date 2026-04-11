@@ -18,18 +18,20 @@ class ES2N(ESN):
         beta=None,
         nonlinearity=None,
         spectral_radius=None,
+        leak_rate=None,
         input_scale=None,
         bias_scale=None,
+        density=None,
         ridge_alpha=None,
         seed=None,
     ):
         super().__init__(
             reservoir_size=reservoir_size,
             spectral_radius=spectral_radius,
-            leak_rate=1.0,
+            leak_rate=leak_rate,
             input_scale=input_scale,
-            bias_scale=0.0 if bias_scale is None else bias_scale,
-            density=1.0,
+            bias_scale=bias_scale,
+            density=density,
             nonlinearity=nonlinearity,
             ridge_alpha=ridge_alpha,
             seed=seed,
@@ -37,7 +39,7 @@ class ES2N(ESN):
 
         self.beta = beta
         if self.beta is None:
-            self.beta = self.rng.uniform(0.02, 0.25)
+            self.beta = self.rng.uniform(0.0, 0.5)
         self.orthogonal = None
 
     def _build_recurrent_operator(self):
@@ -62,8 +64,10 @@ class ES2N(ESN):
             f"beta={self.beta}, "
             f"nonlinearity='{self.nonlinearity}', "
             f"spectral_radius={self.spectral_radius}, "
+            f"leak_rate={self.leak_rate}, "
             f"input_scale={self.input_scale}, "
             f"bias_scale={self.bias_scale}, "
+            f"density={self.density}, "
             f"ridge_alpha={self.ridge_alpha})"
         )
 
@@ -75,18 +79,12 @@ class ES2N(ESN):
         ):
             return
 
-        self.input_dim = input_dim
-        self.state = np.zeros(self.reservoir_size)
-
-        self.w_in = self.rng.normal(
-            loc=0.0,
-            scale=self.input_scale / np.sqrt(max(1, input_dim)),
-            size=(self.reservoir_size, input_dim),
-        )
-        self.bias = self.rng.normal(
-            loc=0.0, scale=self.bias_scale, size=self.reservoir_size
-        )
-        self._build_recurrent_operator()
+        self.orthogonal = None
+        super()._ensure_initialized(input_dim)
+        if self.orthogonal is None:
+            self.orthogonal = special_ortho_group.rvs(
+                self.reservoir_size, random_state=self.rng
+            )
 
     def _advance_state(self, data_point: DataPoint):
         self._ensure_initialized(data_point.state.shape[0])
@@ -99,7 +97,8 @@ class ES2N(ESN):
         )
         nonlinear_state = self._activate(pre_activation)
         linear_state = self.orthogonal @ self.state
-        self.state = self.beta * nonlinear_state + (1 - self.beta) * linear_state
+        esn_state = (1 - self.leak_rate) * self.state + self.leak_rate * nonlinear_state
+        self.state = (1 - self.beta) * esn_state + self.beta * linear_state
 
 
 if __name__ == "__main__":

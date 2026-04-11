@@ -31,8 +31,6 @@ class EMA:
             self.ema = np.zeros_like(data_point.state)
         else:
             self.ema = self.alpha * data_point.state + (1 - self.alpha) * self.ema
-        if not data_point.need_prediction:
-            return None
         return self.ema.copy()
 
 

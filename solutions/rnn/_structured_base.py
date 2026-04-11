@@ -224,8 +224,9 @@ class StructuredESNBase(ABC):
         loss.backward()
         self.readout_optimizer.step()
 
-    def train(self, dataset_path: str, show_progress: bool = True):
-        dataset = pd.read_parquet(dataset_path)
+    def train(self, dataset, show_progress: bool = True):
+        if isinstance(dataset, str):
+            dataset = pd.read_parquet(dataset)
         rows = tqdm(dataset.values) if show_progress else dataset.values
 
         next_features = None
@@ -281,10 +282,6 @@ class StructuredESNBase(ABC):
             )
 
         self._advance_state(data_point)
-
-        if not data_point.need_prediction:
-            return None
-
         features = self._readout_features(data_point.state)
         return features @ self.w_out
 

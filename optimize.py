@@ -15,12 +15,7 @@ SCORER = None
 
 
 def get_model():
-    return random.choice(
-        [
-            ESN(reservoir_size=128),
-            ES2N(reservoir_size=128),
-        ]
-    )
+    return ES2N(reservoir_size=64)
 
 
 def init_worker():

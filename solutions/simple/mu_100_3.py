@@ -19,8 +19,6 @@ class PredictionModel:
             self.current_seq_ix = data_point.seq_ix
             self.sequence_history = []
         self.sequence_history.append(data_point.state.copy())
-        if not data_point.need_prediction:
-            return None
         mu100 = np.mean(self.sequence_history[-100:], axis=0)
         mu3 = np.mean(self.sequence_history[-3:], axis=0)
         return mu100 + 0.3 * (mu3 - mu100) 

@@ -32,9 +32,6 @@ class Poly:
 
         self.sequence_history.append(data_point.state.copy())
 
-        if not data_point.need_prediction:
-            return None
-
         history = np.array(self.sequence_history[::-1][:100])
         indices = np.arange(len(history))
         weights = (indices + self.d) ** (-self.p)
