@@ -4,10 +4,15 @@ import time
 from itertools import count
 from multiprocessing import get_context
 
+import numpy as np
+
 import pandas as pd
 from solutions.rnn.es2n import ES2N
 from solutions.rnn.esn import ESN
-from utils import ScorerStepByStep
+from solutions.rnn.stack import StackESN
+from solutions.simple.ema import EMA
+from solutions.simple.poly import Poly
+from utils import Bag, ScorerStepByStep
 
 TRAIN_FILE = "datasets/train.parquet"
 TEST_FILE = "datasets/test.parquet"
@@ -15,7 +20,24 @@ SCORER = None
 
 
 def get_model():
-    return ES2N(reservoir_size=64)
+    # return StackESN(memory=np.random.choice([EMA(), Poly()]))
+    return Bag(
+        [
+            ES2N(
+                reservoir_size=64,
+                beta=0.3559877553698028,
+                nonlinearity="tanh",
+                spectral_radius=0.9556453544583626,
+                leak_rate=0.1324763897266856,
+                input_scale=0.4,
+                bias_scale=0.05,
+                density=0.14398955615843656,
+                ridge_alpha=0.07195134829894753,
+            )
+            for _ in range(4)
+        ],
+        ridge_alpha=None,
+    )
 
 
 def init_worker():
@@ -38,8 +60,8 @@ def main():
     results = []
     iteration_num = 0
     output_csv = "opt_results.csv"
-    process_count = 5
-    batch_size = 10
+    process_count = 4
+    batch_size = 8
     last_batch_time = time.perf_counter()
     print(f"Using {process_count} processes")
 
