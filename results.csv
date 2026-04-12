@@ -1,4 +1,16 @@
 name,comment,r2
 mu_100_3,mu_100 + 0.3 * (mu_3 - mu_100),0.255308
 EMA(span=18),,0.257825
-"Poly(d=6,p=1.3333333333333333)","",0.263156
+"Poly(d=6,p=1.333)",,0.263156
+LSTM h64 l1 e20,baseline lstm,0.329495
+LSTM h128 l2 drop01 e50,best lstm,0.352309
+GRU h128 l1 e50,Adam lr=1e-3,0.360680
+GRU h128 l2 e50,Adam lr=1e-3 (best so far),0.364154
+GRU h128 l2 e100 lr1e-3,constant lr overfit after ep66,0.367000
+GRU h128 l2 Muon od03 wd03 e100,Muon lr=0.005,0.358299
+GRU h128 l2 Adam od03 wd03 e100,Adam lr=2.5e-3 b=(0.9 0.99),0.356372
+GRU h128 l2 ortho_on e100,ortho init + Muon,0.357293
+GRU MIMO2 b16 drop01 e300,Muon lr=0.005,0.357802
+GRU h64 l1 Adam b99 e50,Adam lr=2.5e-3 b=(0.9 0.99) best small,0.361264
+GRU h64 l1 SGD e50,SGD lr=0.2 m=0.99,0.360231
+GRU h64 l1 Muon e50,Muon lr=0.005,0.358777
