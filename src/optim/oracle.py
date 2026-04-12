@@ -1,10 +1,10 @@
 """Pueue-based oracle for BO hyperparameter optimization.
 
-Shared machinery: normalization, script generation, pueue launch/wait/parse, CSV logging.
+Shared machinery: normalization, script generation, pueue launch/wait/parse, JSONL logging.
 Domain-specific scripts provide the param specs, architecture template, and warm-start data.
 """
 
-import csv
+import json
 import re
 import subprocess
 import time
@@ -56,9 +56,9 @@ def parse_result(pueue_id: int) -> float | None:
     return float(matches[-1]) if matches else None
 
 
-def log_result(path: str, name: str, r2: float):
-    with open(path, "a", newline="") as f:
-        csv.writer(f).writerow([time.strftime("%Y-%m-%d %H:%M:%S"), name, f"{r2:.6f}"])
+def log_result(path: str, params: dict, r2: float):
+    with open(path, "a") as f:
+        f.write(json.dumps({"time": time.strftime("%Y-%m-%d %H:%M:%S"), "params": params, "r2": r2}) + "\n")
 
 
 def run_bo(
@@ -68,12 +68,14 @@ def run_bo(
     x0_actual: np.ndarray,
     warmstart: list[tuple[dict, float]],
     make_script: callable,  # (name: str, params: dict) -> Path
-    n_gens: int = 10,
     pop: int = 2,
     sigma: float = 0.3,
     seed: int = 42,
-    results_file: str = "opt_results.csv",
+    results_file: str | None = None,
 ):
+    if results_file is None:
+        results_file = f"bo_{arch_name}.jsonl"
+
     x0 = to_normalized(x0_actual, specs)
     opt = BO(x0=x0, sigma=sigma, seed=seed)
 
@@ -86,36 +88,45 @@ def run_bo(
         if r2 > opt.best_score:
             opt.best_score = r2
             opt.best_x = x.copy()
-    print(f"BO for {arch_name}: {n_gens} gens, pop={pop}, warm-start={len(warmstart)} points, best={opt.best_score:.4f}")
+    print(f"BO for {arch_name}: pop={pop}, warm-start={len(warmstart)} points, best={opt.best_score:.4f}")
+    print(f"Logging to {results_file}. Ctrl-C to stop.\n")
 
-    for gen in range(n_gens):
-        xs = opt.ask(pop)
-        configs = [from_normalized(x, specs) for x in xs]
+    gen = 0
+    try:
+        while True:
+            xs = opt.ask(pop)
+            configs = [from_normalized(x, specs) for x in xs]
 
-        ids = []
-        for i, cfg in enumerate(configs):
-            name = f"bo_{arch_name}_g{gen}_{i}"
-            script = make_script(name, cfg)
-            pid = launch_pueue(script)
-            ids.append((pid, name, cfg))
-            print(f"  launched {name} (pueue {pid}): {fmt_params(cfg)}")
+            ids = []
+            for i, cfg in enumerate(configs):
+                name = f"bo_{arch_name}_g{gen}_{i}"
+                script = make_script(name, cfg)
+                pid = launch_pueue(script)
+                ids.append((pid, name, cfg))
+                print(f"  launched {name} (pueue {pid}): {fmt_params(cfg)}")
 
-        wait_pueue()
+            wait_pueue()
 
-        scores = []
-        for pid, name, cfg in ids:
-            r2 = parse_result(pid)
-            if r2 is None:
-                print(f"  WARNING: no result for {name} (pueue {pid}), using -1")
-                r2 = -1.0
-            scores.append(r2)
-            log_result(results_file, name, r2)
-            print(f"  {name}: r2={r2:.4f}")
+            scores = []
+            for pid, name, cfg in ids:
+                r2 = parse_result(pid)
+                if r2 is None:
+                    print(f"  WARNING: no result for {name} (pueue {pid}), using -1")
+                    r2 = -1.0
+                scores.append(r2)
+                log_result(results_file, cfg, r2)
+                print(f"  {name}: r2={r2:.4f}")
 
-        opt.tell(xs, np.array(scores))
-        subprocess.run(["pueue", "clean"], capture_output=True)
+            opt.tell(xs, np.array(scores))
+            subprocess.run(["pueue", "clean"], capture_output=True)
 
+            best_params = from_normalized(opt.best(), specs)
+            print(f"  gen {gen}: best_so_far={opt.best_score:.4f}  {fmt_params(best_params)}\n")
+            gen += 1
+
+    except KeyboardInterrupt:
+        print(f"\nStopped after {gen} generations.")
         best_params = from_normalized(opt.best(), specs)
-        print(f"  gen {gen}: best_so_far={opt.best_score:.4f}  {fmt_params(best_params)}\n")
+        print(f"Best: r2={opt.best_score:.4f}  {fmt_params(best_params)}")
 
     return opt
