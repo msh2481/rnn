@@ -1,14 +1,8 @@
-import os
-import sys
-
 import numpy as np
 import pandas as pd
 from tqdm.auto import tqdm
 
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-sys.path.append(f"{CURRENT_DIR}/../..")
-
-from utils import DataPoint
+from src.utils import DataPoint
 
 
 class ESN:
@@ -150,7 +144,7 @@ class ESN:
     def _readout_features(self, state_vector: np.ndarray) -> np.ndarray:
         return np.concatenate([state_vector, self.state, np.array([1.0])])
 
-    def train(self, dataset, show_progress: bool = True):
+    def fit(self, dataset, show_progress: bool = True):
         if isinstance(dataset, str):
             dataset = pd.read_parquet(dataset)
         rows = tqdm(dataset.values) if show_progress else dataset.values
@@ -196,7 +190,7 @@ class ESN:
     def predict(self, data_point: DataPoint) -> np.ndarray:
         if self.w_out is None:
             raise ValueError(
-                "ESN readout is not trained. Call .train(dataset_path) first."
+                "ESN readout is not trained. Call .fit(dataset_path) first."
             )
 
         self._advance_state(data_point)
@@ -205,22 +199,5 @@ class ESN:
 
 
 if __name__ == "__main__":
-    from utils import ScorerStepByStep
-
-    train_file = f"{CURRENT_DIR}/../../datasets/train.parquet"
-    test_file = f"{CURRENT_DIR}/../../datasets/test.parquet"
-    model = ESN()
-    print(model)
-    print("Training ESN readout...")
-    model.train(train_file)
-    scorer = ScorerStepByStep(test_file)
-    print("Testing echo state network...")
-    print(f"Feature dimensionality: {scorer.dim}")
-    print(f"Number of rows in dataset: {len(scorer.dataset)}")
-    results = scorer.score(model)
-    print(f"Mean R² across all features: {results['mean_r2']:.6f}")
-    print("\nR² for first 5 features:")
-    for i in range(min(5, len(scorer.features))):
-        feature = scorer.features[i]
-        print(f"  {feature}: {results[feature]:.6f}")
-    print(f"MSE score: {results['mse_score']:.6f}")
+    from src.utils import train_and_eval
+    train_and_eval(ESN())

@@ -1,14 +1,8 @@
-import os
-import sys
-
 import numpy as np
 from scipy.stats import special_ortho_group
 
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-sys.path.append(f"{CURRENT_DIR}/../..")
-
-from solutions.rnn.esn import ESN
-from utils import DataPoint
+from src.esn.esn import ESN
+from src.utils import DataPoint
 
 
 class ES2N(ESN):
@@ -102,23 +96,5 @@ class ES2N(ESN):
 
 
 if __name__ == "__main__":
-    from utils import ScorerStepByStep
-
-    train_file = f"{CURRENT_DIR}/../../datasets/train.parquet"
-    test_file = f"{CURRENT_DIR}/../../datasets/test.parquet"
-
-    model = ES2N()
-    print(model)
-    print("Training ES2N readout...")
-    model.train(train_file)
-    scorer = ScorerStepByStep(test_file)
-    print("Testing ES2N...")
-    print(f"Feature dimensionality: {scorer.dim}")
-    print(f"Number of rows in dataset: {len(scorer.dataset)}")
-    results = scorer.score(model)
-    print(f"Mean R² across all features: {results['mean_r2']:.6f}")
-    print("\nR² for first 5 features:")
-    for i in range(min(5, len(scorer.features))):
-        feature = scorer.features[i]
-        print(f"  {feature}: {results[feature]:.6f}")
-    print(f"MSE score: {results['mse_score']:.6f}")
+    from src.utils import train_and_eval
+    train_and_eval(ES2N())

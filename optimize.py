@@ -7,12 +7,9 @@ from multiprocessing import get_context
 import numpy as np
 
 import pandas as pd
-from solutions.rnn.es2n import ES2N
-from solutions.rnn.esn import ESN
-from solutions.rnn.stack import StackESN
-from solutions.simple.ema import EMA
-from solutions.simple.poly import Poly
-from utils import Bag, ScorerStepByStep
+from src.esn import ES2N, ESN
+from src.simple import EMA, Poly
+from src.utils import Bag, ScorerStepByStep
 
 TRAIN_FILE = "datasets/train.parquet"
 TEST_FILE = "datasets/test.parquet"
@@ -49,8 +46,8 @@ def init_worker():
 def iteration(_):
     start_time = time.perf_counter()
     model = get_model()
-    if hasattr(model, "train"):
-        model.train(TRAIN_FILE, show_progress=False)
+    if hasattr(model, "fit"):
+        model.fit(TRAIN_FILE, show_progress=False)
     results = SCORER.score(model, show_progress=False)
     elapsed_time = time.perf_counter() - start_time
     return repr(model), results["mean_r2"], elapsed_time

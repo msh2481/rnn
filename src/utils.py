@@ -6,6 +6,10 @@ from sklearn.metrics import r2_score
 from tqdm.auto import tqdm
 
 
+TRAIN_FILE = "datasets/train.parquet"
+TEST_FILE = "datasets/test.parquet"
+
+
 @dataclass
 class DataPoint:
     seq_ix: int
@@ -46,11 +50,11 @@ class Stack:
     def __repr__(self):
         return f"Stack(f={repr(self.f)}, g={repr(self.g)})"
 
-    def train(self, dataset, show_progress: bool = True):
+    def fit(self, dataset, show_progress: bool = True):
         if isinstance(dataset, str):
             dataset = pd.read_parquet(dataset)
         if hasattr(self.f, "train"):
-            self.f.train(dataset, show_progress=show_progress)
+            self.f.fit(dataset, show_progress=show_progress)
 
         rows = tqdm(dataset.values) if show_progress else dataset.values
         residual_rows = []
@@ -76,7 +80,7 @@ class Stack:
             f_last_pred = self.f.predict(data_point)
 
         residual_df = pd.DataFrame(residual_rows, columns=dataset.columns)
-        self.g.train(residual_df, show_progress=show_progress)
+        self.g.fit(residual_df, show_progress=show_progress)
 
 
 class Bag:
@@ -95,13 +99,13 @@ class Bag:
         models_repr = ", ".join(repr(m) for m in self.models)
         return f"Bag(ridge_alpha={self.ridge_alpha}, models=[{models_repr}])"
 
-    def train(self, dataset, show_progress: bool = True):
+    def fit(self, dataset, show_progress: bool = True):
         if isinstance(dataset, str):
             dataset = pd.read_parquet(dataset)
 
         for m in self.models:
             if hasattr(m, "train"):
-                m.train(dataset, show_progress=show_progress)
+                m.fit(dataset, show_progress=show_progress)
 
         if self.ridge_alpha is None:
             return
@@ -196,3 +200,19 @@ class ScorerStepByStep:
         scores["mean_r2"] = np.mean(list(scores.values()))
         scores["mse_score"] = 0.98 - np.mean((predictions - targets) ** 2)
         return scores
+
+
+def train_and_eval(model, train_file=TRAIN_FILE, test_file=TEST_FILE):
+    print(model)
+    if hasattr(model, "fit"):
+        print("Training...")
+        model.fit(train_file)
+    scorer = ScorerStepByStep(test_file)
+    print(f"Testing ({scorer.dim} features, {len(scorer.dataset)} rows)...")
+    results = scorer.score(model)
+    print(f"Mean R²: {results['mean_r2']:.6f}")
+    print(f"MSE score: {results['mse_score']:.6f}")
+    for i in range(min(5, len(scorer.features))):
+        feature = scorer.features[i]
+        print(f"  {feature}: {results[feature]:.6f}")
+    return results
