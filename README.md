@@ -49,9 +49,15 @@ A higher R² score is better!
 
 ---
 
----
-
 ## Development guide
+
+### Setup
+
+```bash
+pip install -e .   # install src as editable package — do this once
+```
+
+This makes `from src.dl import LSTM` work everywhere without PYTHONPATH hacks.
 
 ### Project structure
 
@@ -65,43 +71,38 @@ src/
 │   └── lstm.py           # LSTM
 └── tests/
     └── benchmark.py      # Dataloader benchmarks
+runs/                     # Experiment scripts (one per run config)
 ```
 
 ### Running experiments
 
-All commands run from the project root.
+Each experiment is a small Python script in `runs/`. Example (`runs/lstm_h128_l1.py`):
 
-```bash
-# Run LSTM baseline
-python -m src.dl.lstm
-
-# Or inline with custom params
-python -c "
+```python
 from functools import partial
 import torch.optim as optim
 from src.dl import LSTM
 
-model = LSTM(
-    name='lstm_h256_lr3e4',
-    input_dim=32,
-    hidden_dim=256,
-    num_layers=2,
-    dropout=0.1,
-    n_epochs=30,
-    batch_size=32,
-    mimo=1,
-    optimizer_fn=partial(optim.Adam, lr=3e-4),
-    scheduler_fn=None,
-)
-model.fit()
-"
+LSTM(name="lstm_h128_l1", input_dim=32, hidden_dim=128, num_layers=1, dropout=0.0,
+     n_epochs=50, batch_size=32, mimo=1, optimizer_fn=partial(optim.Adam, lr=1e-3),
+     scheduler_fn=None).fit()
+```
 
-# ESN models (non-DL, no W&B)
-python -c "
-from src.esn import ES2N
-from src.utils import train_and_eval
-train_and_eval(ES2N(reservoir_size=64))
-"
+Run directly or via pueue:
+
+```bash
+python runs/lstm_h128_l1.py          # single run
+pueue add python runs/lstm_h128_l1.py  # queue it
+```
+
+### Pueue workflow
+
+```bash
+pueue add python runs/experiment.py   # queue a job
+pueue status                          # check progress
+pueue wait                            # block until all jobs finish
+pueue log <id>                        # read output of completed job
+pueue clean                           # remove finished jobs from list
 ```
 
 ### Naming convention
@@ -110,15 +111,6 @@ The `name` arg becomes the W&B run name (timestamp appended automatically):
 - `lstm_h128_lr1e3` — hidden_dim=128, lr=1e-3
 - `lstm_h256_l3_drop02` — hidden_dim=256, num_layers=3, dropout=0.2
 - `lstm_mimo2_h128` — mimo=2, hidden_dim=128
-
-### Pueue workflow
-
-```bash
-pueue add -- python -c "..."   # queue a job
-pueue status                    # check progress
-pueue wait                      # block until all jobs finish
-pueue log <id>                  # read output of completed job
-```
 
 ### W&B
 

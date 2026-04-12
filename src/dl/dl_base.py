@@ -118,7 +118,7 @@ class DLBase(nn.Module):
     ):
         ds = SequenceDataset(dataset)
         val_ds = SequenceDataset(val_dataset)
-        loader = DataLoader(ds, batch_size=self.batch_size, shuffle=True)
+        loader = DataLoader(ds, batch_size=self.batch_size * self.mimo, shuffle=True, drop_last=self.mimo > 1)
         device = next(self.parameters()).device
         optimizer = self.optimizer_fn(self.parameters())
         scheduler = self.scheduler_fn(optimizer) if self.scheduler_fn else None
@@ -192,7 +192,7 @@ class DLBase(nn.Module):
         was_training = self.training
         self.eval()
 
-        loader = DataLoader(val_ds, batch_size=self.batch_size, shuffle=False)
+        loader = DataLoader(val_ds, batch_size=self.batch_size * self.mimo, shuffle=False, drop_last=self.mimo > 1)
 
         all_preds = []
         all_targets = []

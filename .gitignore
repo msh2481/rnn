@@ -5,3 +5,4 @@ datasets
 opt_results.csv
 .claude
 wandb
+*.egg-info
