@@ -47,86 +47,83 @@ The final score is the average of the R² scores across all N features.
 
 A higher R² score is better!
 
-## 🚀 Quick start
+---
 
-The fastest way to get started is to run the simple example solution we've provided. This will help you understand the data flow and submission format.
+---
+
+## Development guide
+
+### Project structure
+
+```
+src/
+├── utils.py              # DataPoint, Stack, Bag, ScorerStepByStep, train_and_eval
+├── simple/               # Lightweight baselines (EMA, Poly, Mu100_3)
+├── esn/                  # Echo State Networks (ESN, ES2N)
+├── dl/                   # Deep learning models
+│   ├── dl_base.py        # DLBase, SequenceDataset, W&B integration
+│   └── lstm.py           # LSTM
+└── tests/
+    └── benchmark.py      # Dataloader benchmarks
+```
+
+### Running experiments
+
+All commands run from the project root.
 
 ```bash
-# Navigate to the example directory
-cd examples/simple
+# Run LSTM baseline
+python -m src.dl.lstm
 
-# Run the baseline solution
-python solution.py
+# Or inline with custom params
+python -c "
+from functools import partial
+import torch.optim as optim
+from src.dl import LSTM
+
+model = LSTM(
+    name='lstm_h256_lr3e4',
+    input_dim=32,
+    hidden_dim=256,
+    num_layers=2,
+    dropout=0.1,
+    n_epochs=30,
+    batch_size=32,
+    mimo=1,
+    optimizer_fn=partial(optim.Adam, lr=3e-4),
+    scheduler_fn=None,
+)
+model.fit()
+"
+
+# ESN models (non-DL, no W&B)
+python -c "
+from src.esn import ES2N
+from src.utils import train_and_eval
+train_and_eval(ES2N(reservoir_size=64))
+"
 ```
 
-For a full walkthrough, including setting up your Python environment, check out our detailed Quick Start Guide.
+### Naming convention
 
-After running the example, you'll be ready to build your own model. The provided solution is just a basic placeholder—the real fun is creating something more powerful!
+The `name` arg becomes the W&B run name (timestamp appended automatically):
+- `lstm_h128_lr1e3` — hidden_dim=128, lr=1e-3
+- `lstm_h256_l3_drop02` — hidden_dim=256, num_layers=3, dropout=0.2
+- `lstm_mimo2_h128` — mimo=2, hidden_dim=128
 
-> **Tip: What models could work?**
-> Since this is a sequence modeling task, you could explore:
-> *   Recurrent models like **LSTM** or **GRU**.
-> *   Attention-based models like the **Transformer**.
-> *   Newer architectures like **Mamba-2**.
-
-## How to submit your solution
-
-Your submission must be a `.zip` file containing a `solution.py` file.
-
-### Required structure
-
-Your `solution.py` must define a class named `PredictionModel`. This class must have a `predict` method with the following signature:
-
-```python
-import numpy as np
-from utils import DataPoint
-
-class PredictionModel:
-    def __init__(self):
-        # Initialize your model, internal state, etc.
-        pass
-
-    def predict(self, data_point: DataPoint) -> np.ndarray | None:
-        # Your logic here.
-        if not data_point.need_prediction:
-            return None
-
-        # When a prediction is needed, return a numpy array of length N.
-        prediction = np.zeros(data_point.state.shape) # Replace with your model's output
-        return prediction
-```
-
-The `data_point` object passed to your `predict` method is an instance of the `DataPoint` class, which has the following attributes:
-*   `seq_ix: int`: The ID for the current sequence.
-*   `step_in_seq: int`: The step number within the sequence.
-*   `need_prediction: bool`: Whether a prediction is required for this point.
-*   `state: np.ndarray`: The current market state vector of N features.
-
-Your `predict` method should:
-*   Return `None` when `need_prediction` is `False`.
-*   Return a `numpy.ndarray` of shape `(N,)` when `need_prediction` is `True`.
-*   Remember to manage and reset the model's state for each new sequence (`seq_ix`).
-
-### Packaging your solution
-
-Your solution might include more than just `solution.py` (e.g., model weight files, helper Python modules, configs). Make sure to include all necessary files in your zip archive.
-
-You can create the zip archive from your solution directory with a command like this:
+### Pueue workflow
 
 ```bash
-# From inside your solution folder (e.g., my_awesome_solution/)
-# This command zips up everything in the current directory.
-zip -r ../solution.zip .
+pueue add -- python -c "..."   # queue a job
+pueue status                    # check progress
+pueue wait                      # block until all jobs finish
+pueue log <id>                  # read output of completed job
 ```
 
-> **Note:** Make sure `solution.py` is at the root level inside the zip archive, not inside another folder.
+### W&B
 
-## What's in the box
-
-We've provided a few files to help you:
-
-*   `datasets/train.parquet`: A sample dataset to help you build and test your models.
-*   `utils.py`: Contains helper classes and the scoring function so you can check your performance locally.
-*   `examples/simple/solution.py`: A minimal working example to show the required submission format.
-
-Good luck, and have fun building! We can't wait to see what you create.
+- All DL runs log to project `rnn_challenge` by default
+- Per batch: `train/batch_loss`
+- Per epoch: `train/epoch_loss`, `val/loss`, `val/r2`
+- Config auto-scraped from model attributes
+- `WANDB_MODE=offline` for local-only runs

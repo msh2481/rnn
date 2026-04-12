@@ -4,3 +4,4 @@ _explorer
 datasets
 opt_results.csv
 .claude
+wandb

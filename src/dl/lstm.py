@@ -47,3 +47,26 @@ class LSTM(DLBase):
 
     def reset_state(self) -> None:
         self._h = None
+
+
+if __name__ == "__main__":
+    from functools import partial
+
+    import torch.optim as optim
+
+    from src.utils import train_and_eval
+
+    model = LSTM(
+        name="lstm_baseline",
+        input_dim=32,
+        hidden_dim=64,
+        num_layers=1,
+        dropout=0.0,
+        n_epochs=20,
+        batch_size=32,
+        mimo=1,
+        optimizer_fn=partial(optim.Adam, lr=1e-3),
+        scheduler_fn=None,
+    )
+    model.fit()
+    train_and_eval(model)
