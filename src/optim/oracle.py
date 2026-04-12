@@ -1,7 +1,9 @@
 """Pueue-based oracle for BO hyperparameter optimization.
 
-Shared machinery: normalization, script generation, pueue launch/wait/parse, JSONL logging.
-Domain-specific scripts provide the param specs, architecture template, and warm-start data.
+Shared machinery: probit conversion, script generation, pueue launch/wait/parse, JSONL logging.
+Domain-specific scripts provide the param priors, architecture template, and warm-start data.
+
+Each BO instance uses its own pueue group to avoid interference.
 """
 
 import json
@@ -13,120 +15,128 @@ from pathlib import Path
 import numpy as np
 
 from src.optim.bo import BO
+from src.optim.params import Param
 
 
-def to_normalized(actual: np.ndarray, specs: list[tuple]) -> np.ndarray:
-    out = np.empty(len(specs))
-    for i, (_, low, high, log) in enumerate(specs):
-        if log:
-            out[i] = 2 * (np.log(actual[i]) - np.log(low)) / (np.log(high) - np.log(low)) - 1
-        else:
-            out[i] = 2 * (actual[i] - low) / (high - low) - 1
-    return out
+def to_probit(actual: dict, params: list[Param]) -> np.ndarray:
+    return np.array([p.to_probit(actual[p.name]) for p in params])
 
 
-def from_normalized(x_norm: np.ndarray, specs: list[tuple]) -> dict:
-    params = {}
-    for i, (name, low, high, log) in enumerate(specs):
-        t = np.clip((x_norm[i] + 1) / 2, 0, 1)
-        if log:
-            params[name] = np.exp(np.log(low) + t * (np.log(high) - np.log(low)))
-        else:
-            params[name] = low + t * (high - low)
-    return params
+def from_probit(z: np.ndarray, params: list[Param]) -> dict:
+    return {p.name: p.from_probit(float(z[i])) for i, p in enumerate(params)}
 
 
-def fmt_params(params: dict) -> str:
-    return "  ".join(f"{k}={v:.5g}" for k, v in params.items())
+def fmt_params(config: dict) -> str:
+    return "  ".join(f"{k}={v:.5g}" for k, v in config.items())
 
 
-def launch_pueue(script: Path) -> int:
-    result = subprocess.run(["pueue", "add", "python", str(script)], capture_output=True, text=True)
-    match = re.search(r"id (\d+)", result.stdout)
+def _pueue(args: list[str]) -> str:
+    result = subprocess.run(["pueue"] + args, capture_output=True, text=True)
+    return result.stdout
+
+
+def setup_group(group: str):
+    _pueue(["group", "add", group])
+    _pueue(["parallel", "2", "--group", group])
+
+
+def launch_pueue(script: Path, group: str) -> int:
+    result = _pueue(["add", "--group", group, "python", str(script)])
+    match = re.search(r"id (\d+)", result)
     return int(match.group(1))
 
 
-def wait_pueue():
-    subprocess.run(["pueue", "wait"], capture_output=True)
+def wait_pueue(group: str):
+    subprocess.run(["pueue", "wait", "--group", group], capture_output=True)
 
 
 def parse_result(pueue_id: int) -> float | None:
-    result = subprocess.run(["pueue", "log", str(pueue_id)], capture_output=True, text=True)
-    matches = re.findall(r"val_r2=([\-\d.]+)", result.stdout)
+    result = _pueue(["log", str(pueue_id)])
+    matches = re.findall(r"val_r2=([\-\d.]+)", result)
     return float(matches[-1]) if matches else None
 
 
-def log_result(path: str, params: dict, r2: float):
+def clean_pueue(group: str):
+    _pueue(["clean", "--group", group])
+
+
+def log_result(path: str, config: dict, r2: float):
     with open(path, "a") as f:
-        f.write(json.dumps({"time": time.strftime("%Y-%m-%d %H:%M:%S"), "params": params, "r2": r2}) + "\n")
+        f.write(json.dumps({"time": time.strftime("%Y-%m-%d %H:%M:%S"), "params": config, "r2": r2}) + "\n")
 
 
 def run_bo(
     *,
     arch_name: str,
-    specs: list[tuple],
-    x0_actual: np.ndarray,
+    params: list[Param],
+    x0: dict,
     warmstart: list[tuple[dict, float]],
-    make_script: callable,  # (name: str, params: dict) -> Path
+    make_script: callable,  # (name: str, config: dict) -> Path
     pop: int = 2,
     sigma: float = 0.3,
+    ucb_kappa: float = 0.1,
     seed: int = 42,
     results_file: str | None = None,
 ):
     if results_file is None:
         results_file = f"bo_{arch_name}.jsonl"
 
-    x0 = to_normalized(x0_actual, specs)
-    opt = BO(x0=x0, sigma=sigma, seed=seed)
+    group = f"bo_{arch_name}"
+    setup_group(group)
 
-    # warm-start
-    for params, r2 in warmstart:
-        actual = np.array([params[name] for name, *_ in specs])
-        x = to_normalized(actual, specs)
-        opt.obs_x.append(x)
+    z0 = to_probit(x0, params)
+    opt = BO(x0=z0, sigma=sigma, ucb_kappa=ucb_kappa, seed=seed)
+
+    # warm-start (jitter probit coords slightly to break ties)
+    jitter_rng = np.random.default_rng(seed)
+    for config, r2 in warmstart:
+        z = to_probit(config, params)
+        z += jitter_rng.normal(0, 0.01, size=z.shape)
+        opt.obs_x.append(z)
         opt.obs_y.append(r2)
         if r2 > opt.best_score:
             opt.best_score = r2
-            opt.best_x = x.copy()
+            opt.best_x = z.copy()
     print(f"BO for {arch_name}: pop={pop}, warm-start={len(warmstart)} points, best={opt.best_score:.4f}")
     print(f"Logging to {results_file}. Ctrl-C to stop.\n")
 
     gen = 0
     try:
         while True:
-            xs = opt.ask(pop)
-            configs = [from_normalized(x, specs) for x in xs]
+            zs = opt.ask(pop)
+            configs = [from_probit(z, params) for z in zs]
 
             ids = []
             for i, cfg in enumerate(configs):
                 name = f"bo_{arch_name}_g{gen}_{i}"
                 script = make_script(name, cfg)
-                pid = launch_pueue(script)
+                pid = launch_pueue(script, group)
                 ids.append((pid, name, cfg))
                 print(f"  launched {name} (pueue {pid}): {fmt_params(cfg)}")
 
-            wait_pueue()
+            wait_pueue(group)
 
             scores = []
             for pid, name, cfg in ids:
                 r2 = parse_result(pid)
                 if r2 is None:
-                    print(f"  WARNING: no result for {name} (pueue {pid}), using -1")
-                    r2 = -1.0
+                    print(f"  WARNING: no result for {name} (pueue {pid})")
+                    r2 = 0.1
+                r2 = max(r2, 0.1)
                 scores.append(r2)
                 log_result(results_file, cfg, r2)
                 print(f"  {name}: r2={r2:.4f}")
 
-            opt.tell(xs, np.array(scores))
-            subprocess.run(["pueue", "clean"], capture_output=True)
+            opt.tell(zs, np.array(scores))
+            clean_pueue(group)
 
-            best_params = from_normalized(opt.best(), specs)
-            print(f"  gen {gen}: best_so_far={opt.best_score:.4f}  {fmt_params(best_params)}\n")
+            best_config = from_probit(opt.best(), params)
+            print(f"  gen {gen}: best_so_far={opt.best_score:.4f}  {fmt_params(best_config)}\n")
             gen += 1
 
     except KeyboardInterrupt:
         print(f"\nStopped after {gen} generations.")
-        best_params = from_normalized(opt.best(), specs)
-        print(f"Best: r2={opt.best_score:.4f}  {fmt_params(best_params)}")
+        best_config = from_probit(opt.best(), params)
+        print(f"Best: r2={opt.best_score:.4f}  {fmt_params(best_config)}")
 
     return opt
