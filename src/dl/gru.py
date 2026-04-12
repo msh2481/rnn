@@ -1,11 +1,25 @@
+import numpy as np
 import torch.nn as nn
 from beartype import beartype
 from einops import rearrange
 from jaxtyping import Float
+from scipy.stats import special_ortho_group
 from torch import Tensor as TT
 
 from src.dl.dl_base import DLBase, typed
 from src.dl.dropout import LockedDropout, WeightDrop
+
+
+def _ortho_init(gru: nn.GRU):
+    """Initialize weight_hh with orthogonal matrices (one per gate)."""
+    for name, param in gru.named_parameters():
+        if "weight_hh" not in name:
+            continue
+        h = param.shape[1]
+        n_gates = param.shape[0] // h
+        for g in range(n_gates):
+            ortho = special_ortho_group.rvs(h).astype(np.float32)
+            param.data[g * h : (g + 1) * h] = TT(ortho)
 
 
 class GRU(DLBase):
@@ -20,6 +34,7 @@ class GRU(DLBase):
         input_drop: float,
         output_drop: float,
         layer_drop: float,
+        ortho_init: bool,
         **kw,
     ):
         super().__init__(**kw)
@@ -35,6 +50,8 @@ class GRU(DLBase):
             batch_first=True,
             dropout=layer_drop if num_layers > 1 else 0.0,
         )
+        if ortho_init:
+            _ortho_init(raw_gru)
         self.gru = WeightDrop(raw_gru, weight_drop)
         self.lockdrop = LockedDropout()
         self.readout = nn.Linear(hidden_dim, self.input_dim)

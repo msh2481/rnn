@@ -77,6 +77,7 @@ class DLBase(nn.Module):
         mimo: int,
         optimizer_fn: Callable[..., torch.optim.Optimizer],
         scheduler_fn: Callable[..., torch.optim.lr_scheduler.LRScheduler] | None,
+        grad_clip: float,
     ):
         super().__init__()
         self.name = name
@@ -85,6 +86,7 @@ class DLBase(nn.Module):
         self.mimo = mimo
         self.optimizer_fn = optimizer_fn
         self.scheduler_fn = scheduler_fn
+        self.grad_clip = grad_clip
         self._current_seq_ix: int | None = None
 
     def _get_config(self) -> dict:
@@ -155,6 +157,8 @@ class DLBase(nn.Module):
 
                 optimizer.zero_grad()
                 loss.backward()
+                if self.grad_clip > 0:
+                    nn.utils.clip_grad_norm_(self.parameters(), self.grad_clip)
                 optimizer.step()
 
                 epoch_loss += loss.item()
@@ -192,19 +196,31 @@ class DLBase(nn.Module):
         was_training = self.training
         self.eval()
 
-        loader = DataLoader(val_ds, batch_size=self.batch_size * self.mimo, shuffle=False, drop_last=self.mimo > 1)
+        loader = DataLoader(val_ds, batch_size=self.batch_size, shuffle=False)
 
         all_preds = []
         all_targets = []
         all_masks = []
 
+        M = self.mimo
         for seqs, scored in loader:
             seqs, scored = seqs.to(device), scored.to(device)
-            seqs, scored = self._apply_mimo(seqs, scored)
+
+            if M > 1:
+                # repeat each sequence M times to match inference behavior
+                seqs = repeat(seqs, "B T D -> B T (M D)", M=M)
 
             inputs = seqs[:, :-1]
-            targets = seqs[:, 1:]
-            preds = self.forward(inputs)
+            targets_raw = seqs[:, 1:]
+            preds_raw = self.forward(inputs)
+
+            if M > 1:
+                # average M copies, compare against original targets
+                preds = reduce(preds_raw, "B T (M D) -> B T D", "mean", M=M)
+                targets = reduce(targets_raw, "B T (M D) -> B T D", "mean", M=M)
+            else:
+                preds = preds_raw
+                targets = targets_raw
 
             mask = scored.unsqueeze(-1)
             all_preds.append(preds)
