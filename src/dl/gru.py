@@ -4,7 +4,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from beartype import beartype
 from einops import rearrange
-from haste_pytorch import GRU as HasteGRU
+try:
+    from haste_pytorch import GRU as HasteGRU
+except ImportError:
+    HasteGRU = None
 from jaxtyping import Float
 from scipy.stats import special_ortho_group
 from torch import Tensor as TT
@@ -164,6 +167,8 @@ class GRU(DLBase):
         self.output_drop = output_drop
 
         if use_haste:
+            if HasteGRU is None:
+                raise ImportError("haste_pytorch not installed; install it or set use_haste=False")
             self.gru = StackedHasteGRU(
                 self.input_dim, hidden_dim, num_layers,
                 weight_drop=weight_drop, layer_drop=layer_drop,
