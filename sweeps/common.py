@@ -9,6 +9,7 @@ run_all(sweeps, group_name): launches all runs from all sweeps into one pueue gr
 
 import base64
 import json
+import os
 import re
 import subprocess
 import sys
@@ -17,6 +18,7 @@ from functools import partial
 from pathlib import Path
 from typing import Callable
 
+import torch
 import torch.optim as optim
 
 from src.dl import LayerSpec, TCN
@@ -141,7 +143,9 @@ def _pueue(args: list[str]) -> str:
     return subprocess.run(["pueue"] + args, capture_output=True, text=True).stdout
 
 
-def _setup_group(name: str, parallel: int = 4):
+def _setup_group(name: str, parallel: int | None = None):
+    if parallel is None:
+        parallel = int(os.environ.get("PUEUE_PARALLEL", "4"))
     _pueue(["group", "add", name])
     _pueue(["parallel", str(parallel), "--group", name])
 
@@ -212,9 +216,12 @@ def _run_from_cli():
     name = cfg.pop("_name")
     print(f"config: {cfg}")
 
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"device: {device}")
+
     cv_folds = cfg.get("cv_folds", 0)
     if cv_folds <= 1:
-        build_model(cfg, name).fit()
+        build_model(cfg, name).to(device).fit()
         return
 
     # CV mode: combine train+test, k-fold by seq_ix
@@ -238,7 +245,7 @@ def _run_from_cli():
         train_df = df[~df[seq_col].isin(val_ids)].reset_index(drop=True)
         val_df = df[df[seq_col].isin(val_ids)].reset_index(drop=True)
         print(f"\n=== FOLD {fold+1}/{cv_folds}: train={train_df[seq_col].nunique()} seqs, val={val_df[seq_col].nunique()} seqs ===")
-        m = build_model(cfg, f"{name}_f{fold}")
+        m = build_model(cfg, f"{name}_f{fold}").to(device)
         r2 = m.fit(dataset=train_df, val_dataset=val_df)
         print(f"=== FOLD {fold+1} best_r2={r2:.6f} ===")
         fold_r2s.append(r2)
