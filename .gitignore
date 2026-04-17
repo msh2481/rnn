@@ -8,3 +8,7 @@ wandb
 *.egg-info
 runs/
 bo_*
+sweeps/results/
+sweep_*.log
+old_bo_*.jsonl
+nohup.out

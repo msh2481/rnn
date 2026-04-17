@@ -15,6 +15,7 @@ from torch import Tensor as TT
 from torch.utils.data import DataLoader, Dataset
 from tqdm.auto import tqdm
 
+from src.dl.asgd import NTASGD
 from src.utils import DataPoint, TEST_FILE, TRAIN_FILE
 
 
@@ -78,12 +79,23 @@ class DLBase(nn.Module):
         optimizer_fn: Callable[..., torch.optim.Optimizer],
         scheduler_fn: Callable[..., torch.optim.lr_scheduler.LRScheduler] | None,
         grad_clip: float,
+        asgd_patience: int | None = None,
+        input_noise: float = 0.0,
+        aux_horizons: tuple[int, ...] = (),
+        aux_weight: float = 0.1,
+        mixup_alpha: float = 0.0,
     ):
         super().__init__()
         self.name = name
         self.n_epochs = n_epochs
         self.batch_size = batch_size
         self.mimo = mimo
+        self.asgd_patience = asgd_patience
+        self.input_noise = input_noise
+        self.aux_horizons = aux_horizons
+        self.aux_weight = aux_weight
+        self.mixup_alpha = mixup_alpha
+        self._aux_heads = nn.ModuleDict()
         self.optimizer_fn = optimizer_fn
         self.scheduler_fn = scheduler_fn
         self.grad_clip = grad_clip
@@ -103,6 +115,15 @@ class DLBase(nn.Module):
     @abstractmethod
     @typed
     def forward(self, x: Float[TT, "B T D"]) -> Float[TT, "B T D"]: ...
+
+    def forward_hidden(self, x: Float[TT, "B T D"]) -> Float[TT, "B T H"]:
+        """Return pre-readout hidden states. Override in subclasses that support aux predictions."""
+        raise NotImplementedError("Model must implement forward_hidden() for aux predictions")
+
+    def _init_aux_heads(self, hidden_dim: int, output_dim: int):
+        """Call from subclass __init__ after readout is created."""
+        for k in self.aux_horizons:
+            self._aux_heads[str(k)] = nn.Linear(hidden_dim, output_dim)
 
     @abstractmethod
     @typed
@@ -124,6 +145,14 @@ class DLBase(nn.Module):
         device = next(self.parameters()).device
         optimizer = self.optimizer_fn(self.parameters())
         scheduler = self.scheduler_fn(optimizer) if self.scheduler_fn else None
+        # averaging: use optimizer's built-in if it has avg_step, else NTASGD
+        if hasattr(optimizer, "avg_step"):
+            averager = optimizer
+        elif self.asgd_patience:
+            averager = NTASGD(self, patience=self.asgd_patience)
+        else:
+            averager = None
+
 
         timestamp = datetime.now().strftime("%m%d_%H%M%S")
         run = wandb.init(
@@ -134,6 +163,7 @@ class DLBase(nn.Module):
         step = 0
 
         self.train()
+        best_r2 = -float("inf")
         for epoch in range(self.n_epochs):
             epoch_loss = 0.0
             n_batches = 0
@@ -147,13 +177,37 @@ class DLBase(nn.Module):
                 seqs, scored = seqs.to(device), scored.to(device)
                 seqs, scored = self._apply_mimo(seqs, scored)
 
-                inputs = seqs[:, :-1]
-                targets = seqs[:, 1:]
-                preds = self.forward(inputs)
+                if self.mixup_alpha > 0:
+                    lam = torch.distributions.Beta(self.mixup_alpha, self.mixup_alpha).sample()
+                    lam = max(lam.item(), 1 - lam.item())
+                    perm = torch.randperm(seqs.shape[0], device=device)
+                    seqs = lam * seqs + (1 - lam) * seqs[perm]
+                    scored = torch.min(scored, scored[perm])
+
+                max_k = max(self.aux_horizons) if self.aux_horizons else 1
+                inputs = seqs[:, :-max_k]
+                targets = seqs[:, 1:seqs.shape[1] - max_k + 1]
+                scored_slice = scored[:, :targets.shape[1]]
+                if self.input_noise > 0:
+                    inputs = inputs + self.input_noise * torch.randn_like(inputs)
+
+                if self.aux_horizons:
+                    hidden = self.forward_hidden(inputs)
+                    preds = self.readout(hidden)
+                else:
+                    preds = self.forward(inputs)
 
                 diff = (preds - targets) ** 2
-                mask = scored.unsqueeze(-1)
+                mask = scored_slice.unsqueeze(-1)
                 loss = (diff * mask).sum() / mask.sum().clamp(min=1) / preds.shape[-1]
+
+                # auxiliary multi-horizon losses
+                for k in self.aux_horizons:
+                    aux_targets = seqs[:, k:seqs.shape[1] - max_k + k]
+                    aux_preds = self._aux_heads[str(k)](hidden)
+                    aux_diff = (aux_preds - aux_targets) ** 2
+                    aux_loss = (aux_diff * mask).sum() / mask.sum().clamp(min=1) / preds.shape[-1]
+                    loss = loss + self.aux_weight * aux_loss
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -171,25 +225,46 @@ class DLBase(nn.Module):
 
             avg_loss = epoch_loss / max(n_batches, 1)
             val_metrics = self._eval_metrics(val_ds, device)
-            run.log(
-                {
-                    "train/epoch_loss": avg_loss,
-                    "val/loss": val_metrics["val/loss"],
-                    "val/r2": val_metrics["val/r2"],
-                    "epoch": epoch,
-                },
-                step=step,
-            )
+            log_dict = {
+                "train/epoch_loss": avg_loss,
+                "val/loss": val_metrics["val/loss"],
+                "val/r2": val_metrics["val/r2"],
+                "epoch": epoch,
+            }
+
+            if averager is not None:
+                if epoch >= self.n_epochs * 3 // 4:
+                    averager.force_trigger()
+                averager.avg_step(val_metrics["val/loss"])
+                if averager.triggered:
+                    with averager.averaged():
+                        avg_metrics = self._eval_metrics(val_ds, device)
+                    log_dict["val/r2_avg"] = avg_metrics["val/r2"]
+                    log_dict["val/loss_avg"] = avg_metrics["val/loss"]
+
+            run.log(log_dict, step=step)
+
+            # track best r2 across epochs (prefer averaged when available)
+            epoch_r2 = log_dict.get("val/r2_avg", log_dict["val/r2"])
+            if epoch_r2 > best_r2:
+                best_r2 = epoch_r2
 
             if show_progress:
+                asgd_status = ""
+                if averager is not None and averager.triggered:
+                    asgd_status = f"  r2_avg={log_dict['val/r2_avg']:.6f}  n_avg={averager.n_averaged}"
                 print(
                     f"  train_loss={avg_loss:.6f}"
                     f"  val_loss={val_metrics['val/loss']:.6f}"
                     f"  val_r2={val_metrics['val/r2']:.6f}"
+                    f"{asgd_status}"
                 )
 
+        if averager is not None:
+            averager.swap_in_averaged()
         self.eval()
         run.finish()
+        return best_r2
 
     @torch.no_grad()
     def _eval_metrics(self, val_ds: SequenceDataset, device: torch.device) -> dict:

@@ -24,20 +24,18 @@ class WeightDrop(nn.Module):
             name for name in dir(rnn) if name.startswith("weight_hh_l")
         ]
         assert self._weight_names, f"No weight_hh_l* found in {type(rnn).__name__}"
-        for name in self._weight_names:
-            raw = getattr(rnn, name)
-            delattr(rnn, name)
-            self.register_parameter(f"raw_{name}", raw)
-
-    def _patch_weights(self):
-        for name in self._weight_names:
-            raw = getattr(self, f"raw_{name}")
-            if self.training:
-                dropped = F.dropout(raw, p=self.weight_drop, training=True)
-            else:
-                dropped = raw
-            self.rnn._parameters[name] = dropped
 
     def forward(self, x, hx=None):
-        self._patch_weights()
-        return self.rnn(x, hx)
+        if self.training and self.weight_drop > 0:
+            originals = {}
+            for name in self._weight_names:
+                originals[name] = self.rnn._parameters[name]
+                self.rnn._parameters[name] = F.dropout(originals[name], p=self.weight_drop, training=True)
+
+        result = self.rnn(x) if hx is None else self.rnn(x, hx)
+
+        if self.training and self.weight_drop > 0:
+            for name in self._weight_names:
+                self.rnn._parameters[name] = originals[name]
+
+        return result

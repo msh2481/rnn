@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from src.optim import BO
+from src.optim import BO, SampleBO
 
 PARAMS = [
     ("log_lr",      np.log(1e-3),   np.log(10)),
@@ -88,7 +88,9 @@ if __name__ == "__main__":
             opt.tell(xs, scores)
         return opt
 
-    def sweep(label, x0, n_seeds=50, **kw):
+    N_SEEDS = 10
+
+    def sweep(label, x0, n_seeds=N_SEEDS, **kw):
         scores = []
         for seed in range(n_seeds):
             opt = run_bo_x0(x0, seed=seed, **kw)
@@ -98,11 +100,37 @@ if __name__ == "__main__":
               f"min={scores.min():.4f}  max={scores.max():.4f}")
 
     for kappa in [0.1, 1.0]:
-        print(f"=== kappa={kappa} ===")
+        print(f"=== BO  kappa={kappa} ===")
         print(f"  Close start (score={oracle(x0_norm(), noise_std=0):.3f}):")
         for pop, gens in [(1, 40), (2, 20), (4, 10)]:
             sweep(f"  pop={pop} gens={gens}", x0_norm(), pop=pop, n_gens=gens, ucb_kappa=kappa)
         print(f"  Far start (score={oracle(far_x0, noise_std=0):.3f}):")
         for pop, gens in [(1, 40), (2, 20), (4, 10)]:
             sweep(f"  pop={pop} gens={gens}", far_x0, pop=pop, n_gens=gens, sigma=0.3, ucb_kappa=kappa)
+        print()
+
+    # --- SampleBO (Thompson sampling) ---
+    def sweep_sample(label, x0, n_seeds=N_SEEDS, n_gens=10, pop=2,
+                     sigma=0.3, noise_std=0.005, **kw):
+        scores = []
+        for seed in range(n_seeds):
+            rng = np.random.default_rng(seed + 1000)
+            opt = SampleBO(x0=x0, sigma=sigma, seed=seed, **kw)
+            for _ in range(n_gens):
+                xs = opt.ask(pop)
+                sc = np.array([oracle(xi, noise_std, rng) for xi in xs])
+                opt.tell(xs, sc)
+            scores.append(opt.best_score)
+        scores = np.array(scores)
+        print(f"  {label:35s}  mean={scores.mean():.4f}  std={scores.std():.4f}  "
+              f"min={scores.min():.4f}  max={scores.max():.4f}")
+
+    for temp in [1.0, 2.0, 5.0]:
+        print(f"=== SampleBO (Thompson)  temp={temp} ===")
+        print(f"  Close start (score={oracle(x0_norm(), noise_std=0):.3f}):")
+        for pop, gens in [(1, 40), (2, 20), (4, 10)]:
+            sweep_sample(f"  pop={pop} gens={gens}", x0_norm(), pop=pop, n_gens=gens, temperature=temp)
+        print(f"  Far start (score={oracle(far_x0, noise_std=0):.3f}):")
+        for pop, gens in [(1, 40), (2, 20), (4, 10)]:
+            sweep_sample(f"  pop={pop} gens={gens}", far_x0, pop=pop, n_gens=gens, sigma=0.3, temperature=temp)
         print()

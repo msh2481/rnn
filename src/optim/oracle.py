@@ -14,8 +14,8 @@ from pathlib import Path
 
 import numpy as np
 
-from src.optim.bo import BO
 from src.optim.params import Param
+from src.optim.sample_bo import SampleBO
 
 
 def to_probit(actual: dict, params: list[Param]) -> np.ndarray:
@@ -50,10 +50,10 @@ def wait_pueue(group: str):
     subprocess.run(["pueue", "wait", "--group", group], capture_output=True)
 
 
-def parse_result(pueue_id: int) -> float | None:
+def parse_result(pueue_id: int, metric: str = "val_r2") -> float | None:
     result = _pueue(["log", str(pueue_id)])
-    matches = re.findall(r"val_r2=([\-\d.]+)", result)
-    return float(matches[-1]) if matches else None
+    matches = re.findall(metric + r"=([\-\d.]+)", result)
+    return max(float(m) for m in matches) if matches else None
 
 
 def clean_pueue(group: str):
@@ -73,10 +73,11 @@ def run_bo(
     warmstart: list[tuple[dict, float]],
     make_script: callable,  # (name: str, config: dict) -> Path
     pop: int = 2,
-    sigma: float = 0.3,
-    ucb_kappa: float = 0.1,
+    sigma: float = 1.0,
+    temperature: float = 1.5,
     seed: int = 42,
     results_file: str | None = None,
+    metric: str = "val_r2",
 ):
     if results_file is None:
         results_file = f"bo_{arch_name}.jsonl"
@@ -85,7 +86,7 @@ def run_bo(
     setup_group(group)
 
     z0 = to_probit(x0, params)
-    opt = BO(x0=z0, sigma=sigma, ucb_kappa=ucb_kappa, seed=seed)
+    opt = SampleBO(x0=z0, sigma=sigma, temperature=temperature, seed=seed)
 
     # warm-start (jitter probit coords slightly to break ties)
     jitter_rng = np.random.default_rng(seed)
@@ -97,7 +98,7 @@ def run_bo(
         if r2 > opt.best_score:
             opt.best_score = r2
             opt.best_x = z.copy()
-    print(f"BO for {arch_name}: pop={pop}, warm-start={len(warmstart)} points, best={opt.best_score:.4f}")
+    print(f"SampleBO for {arch_name}: pop={pop}, temp={temperature}, warm-start={len(warmstart)} points, best={opt.best_score:.4f}")
     print(f"Logging to {results_file}. Ctrl-C to stop.\n")
 
     gen = 0
@@ -118,7 +119,7 @@ def run_bo(
 
             scores = []
             for pid, name, cfg in ids:
-                r2 = parse_result(pid)
+                r2 = parse_result(pid, metric=metric)
                 if r2 is None:
                     print(f"  WARNING: no result for {name} (pueue {pid})")
                     r2 = 0.1
